@@ -1,3 +1,41 @@
+# Load BiocManager for Bioconductor packages
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+# List of required packages and their sources
+packages <- list(
+  DESeq2 = "Bioconductor",
+  tidyverse = "CRAN",
+  ashr = "CRAN",
+  ggplot2 = "CRAN",
+  ggrepel = "CRAN",
+  plotly = "CRAN",
+  reshape2 = "CRAN",
+  apeglm = "Bioconductor",
+  viridis = "CRAN",
+  hash = "CRAN",
+  gridExtra = "CRAN",
+  ggdendro = "CRAN",
+  gtable = "CRAN",
+  grid = "CRAN",
+  cogeqc = "Bioconductor",
+  vidger = "Bioconductor"
+)
+
+install_if_missing <- function(pack, source) {
+  if (!requireNamespace(pack, quietly = TRUE)) {
+    if (source == "CRAN") {
+      install.packages(pack, dependencies = TRUE)
+    } else if (source == "Bioconductor") {
+      BiocManager::install(pack)
+    }
+  }
+}
+
+# Loop through each package and install if missing
+lapply(names(packages), function(x) install_if_missing(x, packages[[x]]))
+
 #load librarys
 
 library(DESeq2)
@@ -15,10 +53,10 @@ library(ggdendro)
 library(gtable)
 library(grid)
 library(cogeqc)
-
+library(vidger)
 
 #Read in the count data
-setwd('/Users/kylewillis/Library/CloudStorage/OneDrive-Personal/Documents/Warwick university/Year 3/Dissertation')
+setwd('/Users/kylewillis/Library/CloudStorage/OneDrive-Personal/Documents/Warwick university/Year 3/Dissertation/R')
 counts_data <- read.csv('consolidatetext.csv', row.names = 1, check.names = FALSE)
 
 #Read in the sample data
@@ -88,8 +126,8 @@ dds <- DESeq(dds)
 dds
 
 #Results comparing resistant lines and susceptible lines to a significance level of 1%
-resistant_vs_susceptible_treated_T_R <- results(dds, contrast = c("T_R","TY", "TN"), alpha = 0.001)
-resistant_vs_susceptible_treated_no_contrast <- results(dds, alpha = 0.001)
+resistant_vs_susceptible_treated_T_R <- results(dds, contrast = c("T_R","TY", "TN"), alpha = 0.01)
+resistant_vs_susceptible_treated_no_contrast <- results(dds, alpha = 0.01)
 
 #This produces a summary of the results
 summary(resistant_vs_susceptible_treated_T_R)
@@ -102,39 +140,49 @@ head(resistant_vs_susceptible_treated_T_R)
 #lfcshrink to improve the estimate of fold change
 resistant_vs_susceptible_treated_T_R_LFC <- lfcShrink(dds, contrast = c("T_R", "TY", "TN"), type="ashr")
 resistant_vs_susceptible_treated_T_R_LFC <- resistant_vs_susceptible_treated_T_R_LFC[order(resistant_vs_susceptible_treated_T_R_LFC$padj), ]
-summary(resistant_vs_susceptible_treated_T_R_LFC, alpha = 0.001)
+summary(resistant_vs_susceptible_treated_T_R_LFC, alpha = 0.01)
 
 ###This is the varible that will define how the graphs are made. I did this for easy comaprisons between varibles and the differences they have. It can be either resistant_vs_susceptible_treated or resistant_vs_susceptible_treatedLFC
-DESeq_Result_analaysed <- resistant_vs_susceptible_treated_T_R
+DESeq_Result_analaysed <- resistant_vs_susceptible_treated_T_R_LFC
 
 #MA plot 
-MA_Plot <- plotMA(DESeq_Result_analaysed, ylim=c(-17,17), main="MA Plot")
 
-#This allows for you to click on MA plot points and identify what gene they correspond to.
-idx <- identify(DESeq_Result_analaysed$baseMean, DESeq_Result_analaysed$log2FoldChange,
-                labels = rownames(DESeq_Result_analaysed))
+vsMAPlot(
+  x = "TN", y = "TY",
+  data = dds, d.factor = "T_R", type = "deseq",
+  padj = 0.01, y.lim = c(-10, 10), lfc = NULL, title = FALSE,
+  legend = TRUE, grid = TRUE, data.return = FALSE, highlight = gene_of_interest, xaxis.text.size = 10, yaxis.text.size = 10, xaxis.title.size = 15,
+  yaxis.title.size = 15, main.title.size = 15, legend.text.size = 9
+)
+#This allows for you to click on MA plot points and identify what gene they correspond to. This only works with plotMA
+#MA_Plot <- plotMA(DESeq_Result_analaysed, ylim=c(-17,17), main="MA Plot Treated Resistant vs Treated Control")
+#idx <- identify(DESeq_Result_analaysed$baseMean, DESeq_Result_analaysed$log2FoldChange,
+                #labels = rownames(DESeq_Result_analaysed))
+
 
 #Volcano plot
-
-#set results as data frame
-DESeq_Result_analaysed <- as.data.frame(DESeq_Result_analaysed)
-
 #Label the different genes for volcano plot
 DESeq_Result_analaysed$diffexpressed <- "no significance"
-DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange>0.1 & DESeq_Result_analaysed$padj<0.05] <- "Up regulated"
-DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange<0.1 & DESeq_Result_analaysed$padj<0.05] <- "Down regulated"
+DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange>0.01 & DESeq_Result_analaysed$padj<0.01] <- "Up regulated"
+DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange<0.01 & DESeq_Result_analaysed$padj<0.01] <- "Down regulated"
 
-volcano_plot <- ggplot(data = DESeq_Result_analaysed, aes(x = log2FoldChange, y = -log10(pvalue), col = diffexpressed, text = rownames(DESeq_Result_analaysed))) +
+DESeq_Result_analaysed$Signficant <- "No"
+DESeq_Result_analaysed$Signficant[rownames(DESeq_Result_analaysed) %in% sigGenes] <- "Yes"
+
+volcano_plot <- ggplot(data = DESeq_Result_analaysed, aes(x = log2FoldChange, y = -log10(padj), col = diffexpressed, text = rownames(DESeq_Result_analaysed))) +
   geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
-  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_vline(xintercept = c(-5, 5), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.01), col = "gray", linetype = 'dashed') +
   geom_point(size = 1) +
   scale_color_manual(values = c("blue", "grey", "red"), labels = c("Down Regulated", "Not Significant", "Up Regulated")) +
-  coord_cartesian(ylim = c(0, 80), xlim = c(-16, 16)) +
+  coord_cartesian(ylim = c(0, 80), xlim = c(-10, 10)) +
   labs(color = 'Diffexpressed', 
        x = "log2 FC", 
        y = "-log10 p-value") +
   scale_x_continuous(breaks = seq(-18, 18, 2)) +
-  ggtitle('Volcano Plot')
+  geom_text_repel(aes(label = ifelse(Signficant == "Yes", as.character(rownames(DESeq_Result_analaysed)), "" )), hjust = -0.5) +
+  ggtitle('')
+
 volcano_plot
 
 # Convert to plotly which makes it interactive
@@ -156,7 +204,7 @@ ggPCA <- ggplot(pcaData, aes(PC1, PC2, color=Treatment, shape=Resilient)) +
 ggPCA
 
 ###Search for specific gene and plot the difference in expression.
-gene_of_interest <- "BolC3t16771H"
+gene_of_interest <- "BolC9t53440H"
 
 #look at the count data for a specific gene
 if (gene_of_interest %in% rownames(counts_data_filtered )) {
@@ -186,11 +234,11 @@ gg_plotCount <- ggplot(plotCount, aes(x=Treatment, y=count, col=Resilient)) +
   scale_y_log10() +
   labs(x = "Condition", y = "Count (log10)")
 gg_plotCount
-
+sigGenes
 #filter my results to more specific hits 
-#filtered results are the results that are signficant to 0.001% and gave a log2foldchange of 12 or 12.
+#filtered results are the results that are signficant to 0.001% and gave a log2foldchange of 5 or -5.
 #This filters the results to only include results that have a log2FoldChange that is less than 2 or greater than 2 fold change in gene expression.
-filtered_results <- results(dds, contrast = c("T_R","TY", "TN"), alpha = 0.000001)
+filtered_results <- results(dds, contrast = c("T_R","TY", "TN"), alpha = 0.00001)
 filtered_results <- subset(filtered_results, log2FoldChange > 5 | log2FoldChange < -5)
 summary(filtered_results)
 filtered_results <- as.data.frame(filtered_results)
@@ -219,15 +267,16 @@ heatmap_data <- as.data.frame(heatmap_data)
 heatmap_data$Gene <- rownames(heatmap_data)
 head(heatmap_data)
 
-#Keep only the significantly differentiated genes where the fold-change was at least 5 at signficance of 0.000001
+#Keep only the significantly differentiated genes where the fold-change was at least 5 at signficance of 0.00001
 DESeq_Result_analaysed_df <- as.data.frame(DESeq_Result_analaysed)
-sigGenes <- rownames(DESeq_Result_analaysed_df[DESeq_Result_analaysed_df$padj <= 0.000001 & abs(DESeq_Result_analaysed_df$log2FoldChange) > 5,])
+sigGenes <- rownames(DESeq_Result_analaysed_df[DESeq_Result_analaysed_df$padj <= 0.00001 & abs(DESeq_Result_analaysed_df$log2FoldChange) > 5,])
 
 #To alter the number of genes present in heatmap
-sigGenes <- head(sigGenes[order(DESeq_Result_analaysed_df[sigGenes, "padj"])], 10)
+sigGenes <- head(sigGenes[order(DESeq_Result_analaysed_df[sigGenes, "padj"])], 15)
+sigGenes <- c("BolC2t06596H","BolC3t13711H","BolC3t21362H","BolC9t55625H", "BolC2t10692H", "BolC1t04659H", "BolC4t24804H","BolC3t16771H")
 
-#Only the top 100 signficicant genes will be in heatmap_data
-heatmap_data <- heatmap_data[heatmap_data$Gene %in% sigGenes,]
+#Only the signficicant genes will be in heatmap_data
+heatmap_data <- heatmap_data[heatmap_data$Gene %in% inFourWay,]
 
 #Convert to a long format so that ggplot can be used. Melt will be used for this.
 heatmap_data <- melt(heatmap_data, id.vars=c("Gene"))
@@ -258,10 +307,9 @@ heatmap_data$xAxisValue <- xAxisValues
 #Make the heatmap
 heatmap <- ggplot(heatmap_data, aes(x=xAxisValue, y=Gene, fill=value))+ 
             geom_raster() + 
-            scale_fill_viridis(trans="sqrt") + 
+            scale_fill_viridis(trans="sqrt", option = "D") + 
             theme(axis.text.x=element_text(angle=90, hjust=1), axis.text.y=element_text(),axis.ticks.y=element_blank()) +
             labs(x = "Sample", y = "Genes")
-
 #Clustering
 #the heatmap_data is converted to a matrix and gene names are added back to rownames.
 heatmap_data_matrix <- dcast(heatmap_data, Gene ~ variable)
@@ -308,3 +356,11 @@ heatmap_grob$widths <- as.list(maxWidth)
 #Arrange the grobs into the plot and draw the plot
 final_grob <- arrangeGrob(sample_dendrogram_grob, heatmap_grob, ncol=1, heights=c(2,5))
 grid.draw(final_grob)
+Test
+
+vsFourWay(
+  x = 'TY', y = 'TN',
+  control = 'TN', data = dds,
+  d.factor = 'T_R', type = 'deseq', padj = 0.05, x.lim = NULL,
+  y.lim = NULL, lfc = NULL, legend = TRUE, title = TRUE, grid = TRUE
+)
