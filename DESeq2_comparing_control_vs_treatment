@@ -1,0 +1,310 @@
+#load librarys
+
+library(DESeq2)
+library(tidyverse)
+library(ashr)
+library(ggplot2)
+library(ggrepel)
+library(plotly)
+library(reshape2)
+library(apeglm)
+library(viridis)
+library(hash)
+library(gridExtra)
+library(ggdendro)
+library(gtable)
+library(grid)
+library(cogeqc)
+
+
+#Read in the count data
+setwd('/Users/kylewillis/Library/CloudStorage/OneDrive-Personal/Documents/Warwick university/Year 3/Dissertation/R')
+counts_data <- read.csv('consolidatetext.csv', row.names = 1, check.names = FALSE)
+
+#Read in the sample data
+col_data <- read.csv('cat_drought_meta_data.csv', row.names = 1, check.names = FALSE)
+
+#This checks if the columbn names of count_data = the row names of col_data
+all(colnames(counts_data) %in% rownames(col_data))
+all(colnames(counts_data) == rownames(col_data))
+
+#DESeq dataset object
+
+#Filter the DESeq dataset to only look at the resilient and suceptible cell lines.
+
+#Filter colData to include only GDDH33 and 5557
+col_data_filtered <- col_data[col_data$Line %in% c("GDDH33", "5557"), ]
+
+#Filter countData to include only GDDH33 and 5557 lines
+#Extract the first row of filtered colData as a vector of column names
+colnames_first_row <- rownames(col_data_filtered)
+
+#Filter countData to include only the selected genes
+counts_data_filtered <- counts_data[, colnames_first_row, drop = FALSE]
+
+#Remove genes that include values < threshold in all column sets of a group.
+
+threshold <- 5
+toDeleteData <- c()
+for(i in 1:nrow(counts_data_filtered)) {
+  row <- counts_data_filtered[i,]
+  firstThreeColumns <- row[, 1:3]
+  areAnyOfFirstThreeColumnsLessThanThreshold <- all(firstThreeColumns < threshold)
+  secondThreeColumns <- row[, 4:6]
+  areAnyOfSecondThreeColumnsLessThanThreshold <- all(secondThreeColumns < threshold)
+  thirdThreeColumns <- row[, 7:9]
+  areAnyOfThirdThreeColumnsLessThanThreshold <- all(thirdThreeColumns < threshold)
+  fourthThreeColumns <- row[, 10:12]
+  areAnyOfFourthThreeColumnsLessThanThreshold <- all(fourthThreeColumns < threshold)
+  
+  columnSetDf <- c(areAnyOfFirstThreeColumnsLessThanThreshold, areAnyOfSecondThreeColumnsLessThanThreshold, areAnyOfThirdThreeColumnsLessThanThreshold, areAnyOfFourthThreeColumnsLessThanThreshold)
+  areAnyColumnSetsAllLessThanThreshold <- any(columnSetDf == TRUE)
+  
+  toDeleteData[i] <- areAnyColumnSetsAllLessThanThreshold
+}
+#This adds the delete data to the todelete column in counts data filtered.
+counts_data_filtered$toDelete <- toDeleteData
+
+#This filters out the toDelete columns that are TRUE
+counts_data_filtered_where_any_column_sets_are_less_than_threshold_with_toDelete_column <- counts_data_filtered %>%
+  filter(toDelete == FALSE)  
+
+#This was needed so that counts counts_data_filtered_where_any_column_sets_are_less_than_threshold can be used in deseq function
+counts_data_filtered_where_any_column_sets_are_less_than_threshold <- counts_data_filtered_where_any_column_sets_are_less_than_threshold_with_toDelete_column
+counts_data_filtered_where_any_column_sets_are_less_than_threshold$toDelete <- NULL
+
+#This was needed so that counts counts_data_filtered can be used in deseq function
+counts_data_filtered_dds_ready <- counts_data_filtered
+counts_data_filtered_dds_ready$toDelete <- NULL
+
+### Decide if to remove the data that is below the threshold or to use the orignal dataset. Use either counts_data_filtered_dds_ready or counts_data_filtered_where_any_column_sets_are_less_than_threshold
+count_data <- counts_data_filtered_where_any_column_sets_are_less_than_threshold
+
+#Creates the DESeqDataSet object with filtered data
+dds <- DESeqDataSetFromMatrix(countData = count_data, colData = col_data_filtered, design = ~ Treatment)
+
+#Run DESeq function
+dds <- DESeq(dds)
+dds
+
+#Results comparing resistant lines and susceptible lines to a significance level of 1%
+Treated_vs_Control <- results(dds, contrast = c("Treatment","T", "C"), alpha = 0.001)
+Treated_vsControl_no_contrast <- results(dds, alpha = 0.001)
+
+#This produces a summary of the results
+summary(Treated_vs_Control)
+summary(Treated_vsControl_no_contrast)
+
+#This organised the results in order of adjusted p value and displays the first 6 results.
+Treated_vs_Control <- Treated_vs_Control[order(Treated_vs_Control$padj), ]
+head(Treated_vs_Control)
+
+#lfcshrink to improve the estimate of fold change
+Treated_vs_Control_LFC <- lfcShrink(dds, contrast = c("Treatment", "T", "C"), type="ashr")
+Treated_vs_Control_LFC <- Treated_vs_Control_LFC[order(Treated_vs_Control_LFC$padj), ]
+summary(Treated_vs_Control_LFC, alpha = 0.01)
+
+###This is the varible that will define how the graphs are made. I did this for easy comaprisons between varibles and the differences they have. It can be either resistant_vs_susceptible_treated or resistant_vs_susceptible_treatedLFC
+DESeq_Result_analaysed <- Treated_vs_Control_LFC
+
+#MA plot 
+MA_Plot <- plotMA(DESeq_Result_analaysed, ylim=c(-17,17), main="MA Plot Treatment vs Control")
+
+#This allows for you to click on MA plot points and identify what gene they correspond to.
+idx <- identify(DESeq_Result_analaysed$baseMean, DESeq_Result_analaysed$log2FoldChange,
+                labels = rownames(DESeq_Result_analaysed))
+
+#Volcano plot
+
+#set results as data frame
+DESeq_Result_analaysed <- as.data.frame(DESeq_Result_analaysed)
+
+#Label the different genes for volcano plot
+DESeq_Result_analaysed$diffexpressed <- "no significance"
+DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange>0.1 & DESeq_Result_analaysed$padj<0.05] <- "Up regulated"
+DESeq_Result_analaysed$diffexpressed[DESeq_Result_analaysed$log2FoldChange<0.1 & DESeq_Result_analaysed$padj<0.05] <- "Down regulated"
+
+volcano_plot <- ggplot(data = DESeq_Result_analaysed, aes(x = log2FoldChange, y = -log10(pvalue), col = diffexpressed, text = rownames(DESeq_Result_analaysed))) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.01), col = "gray", linetype = 'dashed') +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("blue", "grey", "red"), labels = c("Down Regulated", "Not Significant", "Up Regulated")) +
+  coord_cartesian(ylim = c(0, 80), xlim = c(-16, 16)) +
+  labs(color = 'Diffexpressed', 
+       x = "log2 FC", 
+       y = "-log10 p-value") +
+  scale_x_continuous(breaks = seq(-18, 18, 2)) +
+  ggtitle('')
+volcano_plot
+
+# Convert to plotly which makes it interactive
+volcano_plotly <- ggplotly(volcano_plot, tooltip = "text")
+
+volcano_plotly
+
+#PCA Plot
+vsdata <- vst(dds, blind=FALSE)
+pcaData <- plotPCA(vsdata, intgroup=c("Treatment", "Resilient"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggPCA <- ggplot(pcaData, aes(PC1, PC2, color=Treatment, shape=Resilient)) +
+  geom_point(size=3) +
+  scale_color_manual(values = c("blue", "red"), labels = c("Control", "Treatment")) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  ggtitle("PCA")+
+  coord_fixed()
+ggPCA
+
+###Search for specific gene and plot the difference in expression.
+gene_of_interest <- "BolC3t16771H"
+
+#look at the count data for a specific gene
+if (gene_of_interest %in% rownames(counts_data_filtered )) {
+  print(counts_data_filtered[gene_of_interest, ])
+} else {
+  print("Gene not found in the counts data")
+}
+
+#Determines if the gene is present in the data and if it is differently expressed.
+if (gene_of_interest %in% rownames(DESeq_Result_analaysed)) {
+  print(DESeq_Result_analaysed[gene_of_interest, ])
+} else {
+  print("Gene not found in the DESeq Results.")
+}
+
+#Plots the difference in expression between untreated and treated for both resistant and non resistant.
+plotCount <- plotCounts(dds, gene = gene_of_interest, intgroup="Treatment", 
+                        returnData=TRUE)
+
+plotCount$Resilient <- dds$Resilient
+
+#ggplot will allow the plotCount to be editied
+gg_plotCount <- ggplot(plotCount, aes(x=Treatment, y=count, col=Resilient)) + 
+  geom_point(position=position_jitter(w=0.2,h=0)) +
+  ggtitle(gene_of_interest) +
+  scale_color_manual(values = c("N" = "blue", "Y" = "red"), labels = c("Susceptible", "Resistant")) +
+  scale_y_log10() +
+  labs(x = "Condition", y = "Count (log10)")
+gg_plotCount
+
+#filter my results to more specific hits 
+#filtered results are the results that are signficant to 0.001% and gave a log2foldchange of 12 or 12.
+#This filters the results to only include results that have a log2FoldChange that is less than 2 or greater than 2 fold change in gene expression.
+filtered_results <- results(dds, contrast = c("Treatment","T", "C"), alpha = 0.000001)
+filtered_results <- subset(filtered_results, log2FoldChange > 5 | log2FoldChange < -5)
+summary(filtered_results)
+filtered_results <- as.data.frame(filtered_results)
+
+#add the column diffexpressed to see if they are upregualted or downregulated.
+filtered_results$diffexpressed <- "no significance"
+filtered_results$diffexpressed[filtered_results$log2FoldChange>0.1 & filtered_results$padj<0.05] <- "Up regulated"
+filtered_results$diffexpressed[filtered_results$log2FoldChange<0.1 & filtered_results$padj<0.05] <- "Down regulated"
+
+#remove all of the results that are not significantly expressed
+filtered_results <- filtered_results %>%
+  filter(diffexpressed != "no significance")
+#This organised the results in order of adjusted p value
+filtered_results <- filtered_results[order(filtered_results$padj), ]
+top100_filtered_results <- head(filtered_results, 100)
+
+#HeatMap
+# Transform count data using the variance stablilizing transform
+heatmap_data <- vst(dds)
+
+#Convert the DESeq transformed object to a data frame
+heatmap_data <- assay(heatmap_data)
+heatmap_data <- as.data.frame(heatmap_data)
+
+#Add the gene names as a column.
+heatmap_data$Gene <- rownames(heatmap_data)
+head(heatmap_data)
+
+#Keep only the significantly differentiated genes where the fold-change was at least 5 at signficance of 0.000001
+DESeq_Result_analaysed_df <- as.data.frame(DESeq_Result_analaysed)
+sigGenes <- rownames(DESeq_Result_analaysed_df[DESeq_Result_analaysed_df$padj <= 0.000001 & abs(DESeq_Result_analaysed_df$log2FoldChange) > 5,])
+
+#To alter the number of genes present in heatmap
+sigGenes <- head(sigGenes[order(DESeq_Result_analaysed_df[sigGenes, "padj"])], 10)
+
+#Only the top 100 signficicant genes will be in heatmap_data
+heatmap_data <- heatmap_data[heatmap_data$Gene %in% sigGenes,]
+
+#Convert to a long format so that ggplot can be used. Melt will be used for this.
+heatmap_data <- melt(heatmap_data, id.vars=c("Gene"))
+
+h <- hash() 
+# set values
+h[["L10_EKRN230055763-1A_HNYF2DSX7_L2.counts"]] <- "GDDH33 Treated L10"
+h[["L11_EKRN230055764-1A_HNNLLDSX7_L4.counts"]] <- "GDDH33 Treated L11"
+h[["L12_EKRN230055765-1A_HNYH7DSX7_L2.counts"]] <- "GDDH33 Treated L12"
+h[["L16_EKRN230055769-1A_HNNLLDSX7_L4.counts"]] <- "GDDH33 Control L16"
+h[["L17_EKRN230055770-1A_HNYF2DSX7_L2.counts"]] <- "GDDH33 Control L17"
+h[["L18_EKRN230055771-1A_HNNLLDSX7_L4.counts"]] <- "GDDH33 Control L18"
+h[["L19_EKRN230055772-1A_HNYF2DSX7_L2.counts"]] <- "5557 Treated L19"
+h[["L20.counts"]] <- "5557 Treated L20"
+h[["L21_EKRN230055774-1A_HNNLLDSX7_L4.counts"]] <- "5557 Treated L21"
+h[["L22_EKRN230055775-1A_HNYF2DSX7_L4.counts"]] <- "5557 Control L22"
+h[["L23.counts"]] <- "5557 Control L23"
+h[["L24_EKRN230055777-1A_HNNLLDSX7_L4.counts"]] <- "5557 Control L24"
+
+xAxisValues <- c()
+for(i in 1:nrow(heatmap_data)) {
+  variableName <- as.character(heatmap_data[i, "variable"])
+  newLabel <- h[[variableName]]
+  xAxisValues[i] <- newLabel
+}
+heatmap_data$xAxisValue <- xAxisValues
+
+#Make the heatmap
+heatmap <- ggplot(heatmap_data, aes(x=xAxisValue, y=Gene, fill=value))+ 
+  geom_raster() + 
+  scale_fill_viridis(trans="sqrt") + 
+  theme(axis.text.x=element_text(angle=90, hjust=1), axis.text.y=element_text(),axis.ticks.y=element_blank()) +
+  labs(x = "Sample", y = "Genes")
+
+#Clustering
+#the heatmap_data is converted to a matrix and gene names are added back to rownames.
+heatmap_data_matrix <- dcast(heatmap_data, Gene ~ variable)
+rownames(heatmap_data_matrix) <- heatmap_data_matrix$Gene
+heatmap_data_matrix$Gene <- NULL
+
+#Calculate the distance of both dimensions of the matrix
+distance_gene <- dist(heatmap_data_matrix)
+distance_sample <- dist(t(heatmap_data_matrix))
+
+#Cluster usiong the distance calculations
+cluster_gene <- hclust(distance_gene, method="average")
+cluster_sample <- hclust(distance_sample, method="average")
+
+#Make a dendogram
+dendogram_model <- as.dendrogram(cluster_sample)
+sample_dendrogram_data <- segment(dendro_data(dendogram_model, type = "rectangle"))
+sample_dendrogram <- ggplot(sample_dendrogram_data) + geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + theme_dendro()
+
+#Re-factor samples for ggplot2
+heatmap_data$variable <- factor(heatmap_data$variable, levels=cluster_sample$labels[cluster_sample$order])
+
+grid.arrange(sample_dendrogram, heatmap, ncol=1, heights=c(1,5))
+
+#Re-allign the dendrogram and the heatmap
+sample_dendrogram_alligned <- sample_dendrogram + scale_x_continuous(expand=c(.0085, .0085)) + scale_y_continuous(expand=c(0, 0))
+heatmap_alligned <- heatmap + scale_x_discrete(expand=c(0, 0)) + scale_y_discrete(expand=c(0, 0))
+
+#Convert to Grobs
+sample_dendrogram_grob <- ggplotGrob(sample_dendrogram_alligned)
+heatmap_grob <- ggplotGrob(heatmap_alligned)
+
+#The widths of the dendorgam and the heatmap
+sample_dendrogram_grob$widths
+heatmap_grob$widths
+
+length(heatmap_grob$widths) == length(sample_dendrogram_grob$widths)
+
+#Stores the maximum width and then sets the maxwidth as a list in both sample_dendorgram_grob and heatmap_grob
+maxWidth <- unit.pmax(sample_dendrogram_grob$widths, heatmap_grob$widths)
+sample_dendrogram_grob$widths <- as.list(maxWidth)
+heatmap_grob$widths <- as.list(maxWidth)
+
+#Arrange the grobs into the plot and draw the plot
+final_grob <- arrangeGrob(sample_dendrogram_grob, heatmap_grob, ncol=1, heights=c(2,5))
+grid.draw(final_grob)
